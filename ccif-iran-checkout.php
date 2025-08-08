@@ -241,10 +241,12 @@ class CCIF_Iran_Checkout_Rebuild {
         $fields['billing']['billing_last_name']['priority'] = 22;
 
         // Address fields
+        $fields['billing']['billing_state']['type'] = 'select';
         $fields['billing']['billing_state']['class'] = ['form-row-first', 'ccif-address-field'];
         $fields['billing']['billing_state']['options'] = [ '' => 'انتخاب کنید' ] + $iran_data['states'];
         $fields['billing']['billing_state']['priority'] = 41;
 
+        $fields['billing']['billing_city']['type'] = 'select';
         $fields['billing']['billing_city']['class'] = ['form-row-last', 'ccif-address-field'];
         $fields['billing']['billing_city']['options'] = [ '' => 'ابتدا استان را انتخاب کنید' ];
         $fields['billing']['billing_city']['priority'] = 42;
