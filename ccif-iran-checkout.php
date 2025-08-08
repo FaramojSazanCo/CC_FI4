@@ -35,15 +35,7 @@ class CCIF_Iran_Checkout_Rebuild {
         add_filter( 'woocommerce_checkout_get_value', [ $this, 'get_custom_field_value_from_user_meta' ], 10, 2 );
         add_action( 'wp_enqueue_scripts', [ $this, 'enqueue_assets' ] );
 
-        // Setup custom rendering late to ensure WC is loaded
-        add_action( 'wp', [ $this, 'setup_custom_rendering_hooks' ] );
-    }
-
-    public function setup_custom_rendering_hooks() {
-        // Remove the default billing form rendering
-        remove_action( 'woocommerce_checkout_billing', [ WC()->checkout(), 'checkout_form_billing' ] );
-
-        // Add our custom rendering functions
+        // Setup custom rendering
         add_action( 'woocommerce_before_checkout_billing_form', [ $this, 'output_layout_wrapper_start' ], 5 );
         add_action( 'woocommerce_checkout_billing', [ $this, 'render_custom_billing_form' ], 10, 1 );
         add_action( 'woocommerce_after_checkout_billing_form', [ $this, 'output_order_notes_box' ], 15 );
@@ -344,7 +336,10 @@ function ccif_iran_checkout_init() {
         return;
     }
 
+    // Remove the default billing form action as early as possible.
+    remove_action( 'woocommerce_checkout_billing', [ WC()->checkout(), 'checkout_form_billing' ] );
+
     // If we get here, WooCommerce is active. Instantiate the main plugin class.
     new CCIF_Iran_Checkout_Rebuild();
 }
-add_action( 'plugins_loaded', 'ccif_iran_checkout_init' );
+add_action( 'plugins_loaded', 'ccif_iran_checkout_init', 11 );
