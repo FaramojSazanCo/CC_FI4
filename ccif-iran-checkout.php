@@ -25,18 +25,17 @@ class CCIF_Iran_Checkout_Rebuild {
     ];
 
     public function __construct() {
-        // Override the default billing form rendering with our custom layout
-        add_action( 'woocommerce_before_checkout_billing_form', [ $this, 'output_custom_billing_form_start' ], 5 );
-        add_action( 'woocommerce_after_checkout_billing_form', [ $this, 'output_custom_billing_form_end' ] );
-
-        // Remove the default billing form
-        add_filter('woocommerce_checkout_billing', '__return_false');
+        // Modify checkout fields
+        add_filter( 'woocommerce_checkout_fields', [ $this, 'modify_checkout_fields' ] );
 
         // Hook into checkout fields to manage them
         add_filter( 'woocommerce_checkout_fields', [ $this, 'move_order_notes_field' ] );
 
         // Modify field arguments, e.g., to remove '(optional)' text
         add_filter( 'woocommerce_form_field_args', [ $this, 'remove_optional_text' ], 10, 3 );
+
+        // Save custom fields to order meta
+        add_action( 'woocommerce_checkout_create_order', [ $this, 'save_custom_fields_to_order_meta' ], 10, 2 );
 
         // Save custom fields to user meta
         add_action( 'woocommerce_checkout_update_user_meta', [ $this, 'save_custom_fields_to_user_meta' ], 10, 2 );
@@ -46,6 +45,28 @@ class CCIF_Iran_Checkout_Rebuild {
 
         // Enqueue scripts and styles
         add_action( 'wp_enqueue_scripts', [ $this, 'enqueue_assets' ] );
+
+        // Custom layout hooks
+        add_action( 'woocommerce_before_checkout_billing_form', [ $this, 'output_layout_wrapper_start' ], 5 );
+        add_action( 'woocommerce_after_checkout_billing_form', [ $this, 'output_layout_wrapper_end' ], 20 );
+
+        // Inject boxes based on field priorities
+        add_action( 'woocommerce_checkout_billing', [ $this, 'output_invoice_box_start' ], 0 );
+        add_action( 'woocommerce_checkout_billing', [ $this, 'output_person_info_box_start' ], 9 );
+        add_action( 'woocommerce_checkout_billing', [ $this, 'output_address_info_box_start' ], 40 );
+        add_action( 'woocommerce_checkout_billing', [ $this, 'close_final_box' ], 999 );
+
+    }
+
+    public function save_custom_fields_to_order_meta( $order, $data ) {
+        $this->log_message( 'Attempting to save custom fields for order ID: ' . $order->get_id() );
+        foreach ( $this->custom_billing_fields as $field_key ) {
+            if ( isset( $data[ $field_key ] ) && ! empty( $data[ $field_key ] ) ) {
+                $value = sanitize_text_field( $data[ $field_key ] );
+                $order->update_meta_data( '_' . $field_key, $value );
+                $this->log_message( "Saved meta for order {$order->get_id()}: { '{$field_key}' : '{$value}' }" );
+            }
+        }
     }
 
     public function save_custom_fields_to_user_meta( $customer_id, $posted_data ) {
@@ -152,81 +173,63 @@ class CCIF_Iran_Checkout_Rebuild {
         return ['states' => $wc_states, 'cities' => $cities];
     }
 
-    public function get_all_checkout_fields() {
+    public function modify_checkout_fields( $fields ) {
+        $this->log_message( 'Modifying checkout fields.' );
         $iran_data = $this->load_iran_data();
-        $fields = [];
 
-        // --- Define All Fields ---
-        $fields['billing_invoice_request'] = ['type' => 'checkbox', 'label' => 'درخواست صدور فاکتور رسمی', 'class' => ['form-row-wide', 'ccif-invoice-request-field']];
+        // --- Custom Fields Definition ---
+        $custom_fields = [
+            'billing_invoice_request' => ['type' => 'checkbox', 'label' => 'درخواست صدور فاکتور رسمی', 'class' => ['form-row-wide', 'ccif-invoice-request-field'], 'priority' => 1],
+            'billing_person_type'     => ['type' => 'select', 'label' => 'نوع شخص', 'class' => ['form-row-wide', 'ccif-person-field'], 'options' => ['' => 'انتخاب کنید', 'real' => 'حقیقی', 'legal' => 'حقوقی'], 'priority' => 10],
 
-        $fields['billing_person_type'] = ['type' => 'select', 'label' => 'نوع شخص', 'class' => ['form-row-wide', 'ccif-person-field'], 'options' => ['' => 'انتخاب کنید', 'real' => 'حقیقی', 'legal' => 'حقوقی']];
+            // Real Person Fields
+            'billing_national_code'   => ['label' => 'کد ملی', 'class' => ['form-row-wide', 'ccif-person-field', 'ccif-real-person-field'], 'placeholder' => '۱۰ رقم بدون خط تیره', 'priority' => 23],
 
-        $fields['billing_first_name'] = ['label' => 'نام', 'class' => ['form-row-first', 'ccif-person-field', 'ccif-real-person-field']];
-        $fields['billing_last_name'] = ['label' => 'نام خانوادگی', 'class' => ['form-row-last', 'ccif-person-field', 'ccif-real-person-field']];
-        $fields['billing_national_code'] = ['label' => 'کد ملی', 'class' => ['form-row-wide', 'ccif-person-field', 'ccif-real-person-field'], 'placeholder' => '۱۰ رقم بدون خط تیره'];
+            // Legal Person Fields
+            'billing_company_name'    => ['label' => 'نام شرکت', 'class' => ['form-row-first', 'ccif-person-field', 'ccif-legal-person-field'], 'priority' => 31],
+            'billing_economic_code'   => ['label' => 'شناسه ملی/اقتصادی', 'class' => ['form-row-last', 'ccif-person-field', 'ccif-legal-person-field'], 'priority' => 32],
+            'billing_agent_first_name' => ['label' => 'نام نماینده', 'class' => ['form-row-first', 'ccif-person-field', 'ccif-legal-person-field'], 'priority' => 33],
+            'billing_agent_last_name' => ['label' => 'نام خانوادگی نماینده', 'class' => ['form-row-last', 'ccif-person-field', 'ccif-legal-person-field'], 'priority' => 34],
+        ];
 
-        $fields['billing_company_name'] = ['label' => 'نام شرکت', 'class' => ['form-row-first', 'ccif-person-field', 'ccif-legal-person-field']];
-        $fields['billing_economic_code'] = ['label' => 'شناسه ملی/اقتصادی', 'class' => ['form-row-last', 'ccif-person-field', 'ccif-legal-person-field']];
-        $fields['billing_agent_first_name'] = ['label' => 'نام نماینده', 'class' => ['form-row-first', 'ccif-person-field', 'ccif-legal-person-field']];
-        $fields['billing_agent_last_name'] = ['label' => 'نام خانوادگی نماینده', 'class' => ['form-row-last', 'ccif-person-field', 'ccif-legal-person-field']];
+        // Merge our custom fields into the billing group
+        $fields['billing'] = array_merge($fields['billing'], $custom_fields);
 
-        $fields['billing_state'] = ['type' => 'select', 'label' => 'استان', 'required' => true, 'class' => ['form-row-first', 'ccif-address-field'], 'options' => [ '' => 'انتخاب کنید' ] + $iran_data['states']];
-        $fields['billing_city'] = ['type' => 'select', 'label' => 'شهر', 'required' => true, 'class' => ['form-row-last', 'ccif-address-field'], 'options' => [ '' => 'ابتدا استان را انتخاب کنید' ]];
-        $fields['billing_address_1'] = ['label' => 'آدرس دقیق', 'required' => true, 'placeholder' => 'خیابان، کوچه، پلاک، واحد', 'class' => ['form-row-wide', 'ccif-address-field']];
-        $fields['billing_postcode'] = ['label' => 'کد پستی', 'required' => true, 'type' => 'tel', 'class' => ['form-row-first', 'ccif-address-field']];
-        $fields['billing_phone'] = ['label' => 'شماره تماس', 'required' => true, 'type' => 'tel', 'class' => ['form-row-last', 'ccif-address-field']];
+        // --- Modify Standard Fields ---
+        // Real person fields
+        $fields['billing']['billing_first_name']['class'] = ['form-row-first', 'ccif-person-field', 'ccif-real-person-field'];
+        $fields['billing']['billing_first_name']['priority'] = 21;
+        $fields['billing']['billing_last_name']['class'] = ['form-row-last', 'ccif-person-field', 'ccif-real-person-field'];
+        $fields['billing']['billing_last_name']['priority'] = 22;
+
+        // Address fields
+        $fields['billing']['billing_state']['class'] = ['form-row-first', 'ccif-address-field'];
+        $fields['billing']['billing_state']['options'] = [ '' => 'انتخاب کنید' ] + $iran_data['states'];
+        $fields['billing']['billing_state']['priority'] = 41;
+
+        $fields['billing']['billing_city']['class'] = ['form-row-last', 'ccif-address-field'];
+        $fields['billing']['billing_city']['options'] = [ '' => 'ابتدا استان را انتخاب کنید' ];
+        $fields['billing']['billing_city']['priority'] = 42;
+
+        $fields['billing']['billing_address_1']['label'] = 'آدرس دقیق';
+        $fields['billing']['billing_address_1']['placeholder'] = 'خیابان، کوچه، پلاک، واحد';
+        $fields['billing']['billing_address_1']['class'] = ['form-row-wide', 'ccif-address-field'];
+        $fields['billing']['billing_address_1']['priority'] = 51;
+
+        $fields['billing']['billing_postcode']['class'] = ['form-row-first', 'ccif-address-field'];
+        $fields['billing']['billing_postcode']['priority'] = 61;
+
+        $fields['billing']['billing_phone']['class'] = ['form-row-last', 'ccif-address-field'];
+        $fields['billing']['billing_phone']['priority'] = 62;
+
+        // --- Unset Unwanted Fields ---
+        unset($fields['billing']['billing_company']); // Use our own company name field
+        unset($fields['billing']['billing_address_2']); // Not needed
+
+        // --- Reorder All Billing Fields ---
+        uasort($fields['billing'], 'wc_checkout_fields_uasort_comparison');
 
         return $fields;
-    }
-
-    public function output_custom_billing_form_start($checkout) {
-        $all_fields = $this->get_all_checkout_fields();
-
-        echo '<div class="ccif-checkout-form">';
-
-        // Box 1: Invoice Request
-        echo '<div class="ccif-box invoice-request-box">';
-        woocommerce_form_field('billing_invoice_request', $all_fields['billing_invoice_request'], $checkout->get_value('billing_invoice_request'));
-        echo '<p class="ccif-hint">در صورت نیاز به فاکتور رسمی، این گزینه را انتخاب و تمام اطلاعات خریدار را به دقت وارد نمایید. در غیر این صورت، تنها تکمیل اطلاعات ارسال کافی است.</p>';
-        echo '</div>';
-
-        // Box 2: Person/Company Info
-        echo '<div class="ccif-box person-info-box"><h2 class="ccif-person-info-header">اطلاعات خریدار</h2>';
-        woocommerce_form_field('billing_person_type', $all_fields['billing_person_type'], $checkout->get_value('billing_person_type'));
-
-        echo '<div class="ccif-real-person-fields-wrapper">';
-        woocommerce_form_field('billing_first_name', $all_fields['billing_first_name'], $checkout->get_value('billing_first_name'));
-        woocommerce_form_field('billing_last_name', $all_fields['billing_last_name'], $checkout->get_value('billing_last_name'));
-        woocommerce_form_field('billing_national_code', $all_fields['billing_national_code'], $checkout->get_value('billing_national_code'));
-        echo '</div>';
-
-        echo '<div class="ccif-legal-person-fields-wrapper">';
-        woocommerce_form_field('billing_company_name', $all_fields['billing_company_name'], $checkout->get_value('billing_company_name'));
-        woocommerce_form_field('billing_economic_code', $all_fields['billing_economic_code'], $checkout->get_value('billing_economic_code'));
-        woocommerce_form_field('billing_agent_first_name', $all_fields['billing_agent_first_name'], $checkout->get_value('billing_agent_first_name'));
-        woocommerce_form_field('billing_agent_last_name', $all_fields['billing_agent_last_name'], $checkout->get_value('billing_agent_last_name'));
-        echo '</div>';
-        echo '</div>';
-
-        // Box 3: Address Info
-        echo '<div class="ccif-box address-info-box"><h2 class="ccif-address-info-header">اطلاعات ارسال</h2>';
-        woocommerce_form_field('billing_state', $all_fields['billing_state'], $checkout->get_value('billing_state'));
-        woocommerce_form_field('billing_city', $all_fields['billing_city'], $checkout->get_value('billing_city'));
-        woocommerce_form_field('billing_address_1', $all_fields['billing_address_1'], $checkout->get_value('billing_address_1'));
-        woocommerce_form_field('billing_postcode', $all_fields['billing_postcode'], $checkout->get_value('billing_postcode'));
-        woocommerce_form_field('billing_phone', $all_fields['billing_phone'], $checkout->get_value('billing_phone'));
-        echo '</div>';
-
-        // Box 4: Order Notes
-        if ( ! empty( $this->order_notes_field ) ) {
-            echo '<div class="ccif-box order-notes-box"><h2 class="ccif-order-notes-header">توضیحات تکمیلی</h2>';
-            woocommerce_form_field( 'order_comments', $this->order_notes_field, $checkout->get_value( 'order_comments' ) );
-            echo '</div>';
-        }
-    }
-
-    public function output_custom_billing_form_end() {
-        echo '</div>'; // Close .ccif-checkout-form
     }
 
     public function enqueue_assets() {
@@ -234,6 +237,46 @@ class CCIF_Iran_Checkout_Rebuild {
         wp_enqueue_script( 'ccif-checkout-js', plugin_dir_url( __FILE__ ) . 'assets/js/ccif-checkout.js', ['jquery'], '6.0', true );
         wp_localize_script( 'ccif-checkout-js', 'ccifData', [ 'cities' => $this->load_iran_data()['cities'] ] );
         wp_enqueue_style( 'ccif-checkout-css', plugin_dir_url( __FILE__ ) . 'assets/css/ccif-checkout.css', [], '6.0' );
+    }
+
+    // --- Custom Layout Functions ---
+    public function output_layout_wrapper_start() {
+        echo '<div class="ccif-checkout-form">';
+    }
+
+    public function output_invoice_box_start() {
+        echo '<div class="ccif-box invoice-request-box">';
+    }
+
+    public function output_person_info_box_start() {
+        echo '</div>'; // Close invoice-request-box
+        echo '<div class="ccif-box person-info-box"><h2 class="ccif-person-info-header">اطلاعات خریدار</h2>';
+    }
+
+    public function output_address_info_box_start() {
+        echo '</div>'; // Close person-info-box
+        echo '<div class="ccif-box address-info-box"><h2 class="ccif-address-info-header">اطلاعات ارسال</h2>';
+    }
+
+    public function close_final_box() {
+        echo '</div>'; // Close address-info-box
+    }
+
+    public function output_layout_wrapper_end() {
+        // Note: The order notes box is not included in this refactor to simplify things,
+        // as it belongs to the 'order' fields group, not 'billing'.
+        // The final div for the main wrapper is closed here.
+        echo '</div>'; // Close ccif-checkout-form
+    }
+
+
+    private function log_message( $message ) {
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG === true ) {
+            if ( function_exists( 'wc_get_logger' ) ) {
+                $logger = wc_get_logger();
+                $logger->debug( $message, [ 'source' => 'ccif-iran-checkout' ] );
+            }
+        }
     }
 }
 
