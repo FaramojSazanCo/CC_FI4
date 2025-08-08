@@ -25,6 +25,9 @@ class CCIF_Iran_Checkout_Rebuild {
     ];
 
     public function __construct() {
+        // Add custom validation
+        add_action( 'woocommerce_checkout_process', [ $this, 'validate_custom_fields' ] );
+
         // Modify checkout fields
         add_filter( 'woocommerce_checkout_fields', [ $this, 'modify_checkout_fields' ] );
 
@@ -48,14 +51,48 @@ class CCIF_Iran_Checkout_Rebuild {
 
         // Custom layout hooks
         add_action( 'woocommerce_before_checkout_billing_form', [ $this, 'output_layout_wrapper_start' ], 5 );
+        add_action( 'woocommerce_after_checkout_billing_form', [ $this, 'output_order_notes_box' ], 15 );
         add_action( 'woocommerce_after_checkout_billing_form', [ $this, 'output_layout_wrapper_end' ], 20 );
 
         // Inject boxes based on field priorities
         add_action( 'woocommerce_checkout_billing', [ $this, 'output_invoice_box_start' ], 0 );
+        add_action( 'woocommerce_checkout_billing', [ $this, 'add_invoice_hint' ], 2 );
         add_action( 'woocommerce_checkout_billing', [ $this, 'output_person_info_box_start' ], 9 );
+        add_action( 'woocommerce_checkout_billing', [ $this, 'output_field_wrappers_start' ], 20 );
+        add_action( 'woocommerce_checkout_billing', [ $this, 'output_field_wrappers_middle' ], 30 );
+        add_action( 'woocommerce_checkout_billing', [ $this, 'output_field_wrappers_end' ], 35 );
         add_action( 'woocommerce_checkout_billing', [ $this, 'output_address_info_box_start' ], 40 );
         add_action( 'woocommerce_checkout_billing', [ $this, 'close_final_box' ], 999 );
 
+    }
+
+    public function validate_custom_fields() {
+        $is_invoice_requested = isset( $_POST['billing_invoice_request'] ) && $_POST['billing_invoice_request'] == 1;
+        $person_type = isset( $_POST['billing_person_type'] ) ? $_POST['billing_person_type'] : '';
+
+        // --- Postcode Validation (only if the field is not empty) ---
+        if ( ! empty( $_POST['billing_postcode'] ) && ( ! is_numeric( $_POST['billing_postcode'] ) || strlen( $_POST['billing_postcode'] ) !== 10 ) ) {
+            wc_add_notice( __( 'لطفاً یک <strong>کد پستی</strong> معتبر ۱۰ رقمی و عددی وارد کنید.' ), 'error' );
+        }
+
+        // --- Phone Validation (only if the field is not empty) ---
+        if ( ! empty( $_POST['billing_phone'] ) && ! is_numeric( $_POST['billing_phone'] ) ) {
+            wc_add_notice( __( 'فیلد <strong>شماره تماس</strong> باید فقط شامل اعداد باشد.' ), 'error' );
+        }
+
+        // --- Conditional Validation based on Invoice Request ---
+        if ( $is_invoice_requested ) {
+            if ( $person_type === 'real' && ! empty( $_POST['billing_national_code'] ) ) {
+                if ( ! is_numeric( $_POST['billing_national_code'] ) || strlen( $_POST['billing_national_code'] ) !== 10 ) {
+                    wc_add_notice( __( 'لطفاً یک <strong>کد ملی</strong> معتبر ۱۰ رقمی و عددی وارد کنید.' ), 'error' );
+                }
+            }
+            if ( $person_type === 'legal' && ! empty( $_POST['billing_economic_code'] ) ) {
+                if ( ! is_numeric( $_POST['billing_economic_code'] ) ) {
+                    wc_add_notice( __( 'فیلد <strong>شناسه ملی/اقتصادی</strong> باید فقط شامل اعداد باشد.' ), 'error' );
+                }
+            }
+        }
     }
 
     public function save_custom_fields_to_order_meta( $order, $data ) {
@@ -101,8 +138,9 @@ class CCIF_Iran_Checkout_Rebuild {
 
     public function move_order_notes_field( $fields ) {
         if ( isset( $fields['order'] ) && isset( $fields['order']['order_comments'] ) ) {
+            // We capture the field definition but no longer unset it from the main array.
+            // WooCommerce will render it in its default location unless we render it manually elsewhere.
             $this->order_notes_field = $fields['order']['order_comments'];
-            unset( $fields['order']['order_comments'] );
         }
         return $fields;
     }
@@ -248,9 +286,25 @@ class CCIF_Iran_Checkout_Rebuild {
         echo '<div class="ccif-box invoice-request-box">';
     }
 
+    public function add_invoice_hint() {
+        echo '<p class="ccif-hint">در صورت نیاز به فاکتور رسمی، این گزینه را انتخاب و تمام اطلاعات خریدار را به دقت وارد نمایید. در غیر این صورت، تنها تکمیل اطلاعات ارسال کافی است.</p>';
+    }
+
     public function output_person_info_box_start() {
         echo '</div>'; // Close invoice-request-box
         echo '<div class="ccif-box person-info-box"><h2 class="ccif-person-info-header">اطلاعات خریدار</h2>';
+    }
+
+    public function output_field_wrappers_start() {
+        echo '<div class="ccif-real-person-fields-wrapper">';
+    }
+
+    public function output_field_wrappers_middle() {
+        echo '</div><div class="ccif-legal-person-fields-wrapper">';
+    }
+
+    public function output_field_wrappers_end() {
+        echo '</div>';
     }
 
     public function output_address_info_box_start() {
@@ -262,9 +316,19 @@ class CCIF_Iran_Checkout_Rebuild {
         echo '</div>'; // Close address-info-box
     }
 
+    public function output_order_notes_box( $checkout ) {
+        // First, unset the default rendering of order notes if it exists
+        add_filter('woocommerce_enable_order_notes_field', '__return_false');
+
+        if ( ! empty( $this->order_notes_field ) ) {
+            echo '<div class="ccif-box order-notes-box"><h2 class="ccif-order-notes-header">توضیحات تکمیلی</h2>';
+            // Manually render the field here
+            woocommerce_form_field( 'order_comments', $this->order_notes_field, $checkout->get_value( 'order_comments' ) );
+            echo '</div>';
+        }
+    }
+
     public function output_layout_wrapper_end() {
-        // Note: The order notes box is not included in this refactor to simplify things,
-        // as it belongs to the 'order' fields group, not 'billing'.
         // The final div for the main wrapper is closed here.
         echo '</div>'; // Close ccif-checkout-form
     }
