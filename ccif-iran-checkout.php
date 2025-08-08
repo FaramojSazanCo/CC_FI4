@@ -335,4 +335,16 @@ class CCIF_Iran_Checkout_Rebuild {
     }
 }
 
-new CCIF_Iran_Checkout_Rebuild();
+/**
+ * Initializes the plugin after all other plugins are loaded.
+ */
+function ccif_iran_checkout_init() {
+    // Check if WooCommerce is active. If not, do nothing.
+    if ( ! class_exists( 'WooCommerce' ) ) {
+        return;
+    }
+
+    // If we get here, WooCommerce is active. Instantiate the main plugin class.
+    new CCIF_Iran_Checkout_Rebuild();
+}
+add_action( 'plugins_loaded', 'ccif_iran_checkout_init' );
